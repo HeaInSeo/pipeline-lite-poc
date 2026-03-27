@@ -34,5 +34,6 @@ kubeconfig*
 .env.local
 runner binary
 
-# built binaries
-runner
+# built binaries (root-level executables only, not source directories)
+/runner
+/dag-runner

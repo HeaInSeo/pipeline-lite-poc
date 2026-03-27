@@ -1,5 +1,45 @@
 # PROGRESS_LOG
 
+## Day 4 - 2026-03-27
+
+### 오늘 목표
+- dag-go Runnable interface 구현하는 SpawnerNode adapter 작성
+- dag-go로 single node A 실행 (success/fail 양쪽 검증)
+
+### 변경 파일 목록
+**poc:**
+- pkg/adapter/spawner_node.go: SpawnerNode (dag-go Runnable 구현)
+- cmd/dag-runner/main.go: dag-go 기반 검증 runner
+- go.mod / go.sum: dag-go v0.0.9 추가
+
+### 구현한 내용
+- SpawnerNode: dag-go.Runnable 구현, RunE = Prepare→Start→Wait
+- dag-go 실행 흐름: InitDag → CreateNode → AddEdge(StartNode→node) → FinishDag → ConnectRunner → GetReady → Start → Wait
+- 핵심 발견: 단일 노드도 반드시 AddEdge(StartNode, nodeID) 연결 필요
+- 실패 전파: job 실패 시 RunE가 error 반환 → dag-go가 InFlightFailed 처리 → Wait returns false
+
+### 검증 명령 및 결과
+```bash
+go run ./cmd/dag-runner/ success
+# [dag-runner] PASS: DAG succeeded (node dag-node-a-ok)
+
+go run ./cmd/dag-runner/ fail
+# [dag-runner] FAIL: DAG did not succeed (node dag-node-a-fail)
+# exit status 1  ← 예상된 실패
+```
+
+### 아직 안 된 것
+- A→B→C 파이프라인 (Day 5)
+- shared PVC handoff (Day 5)
+
+### 리스크 / 막힌 점
+- dag-go 단일 노드: start_node가 orphan 오류 → AddEdge(StartNode, id) 추가로 해결
+
+### 내일 첫 작업 제안
+A→B→C 파이프라인: dag-go AddEdge로 선형 체인 구성 + shared PVC로 파일 handoff 검증
+
+---
+
 ## Day 3 - 2026-03-27
 
 ### 오늘 목표
@@ -159,3 +199,5 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 <!-- session-end: 2026-03-27 19:31:03 -->
 
 <!-- session-end: 2026-03-27 19:31:13 -->
+
+<!-- session-end: 2026-03-27 21:05:18 -->

@@ -1,0 +1,16 @@
+# Shared PVC for Pipeline-Lite PoC
+# All pipeline nodes mount this PVC at /data
+# kind uses hostPath provisioner (RWO is fine for single-node)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: poc-shared-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # kind default storage class: standard
+  storageClassName: standard

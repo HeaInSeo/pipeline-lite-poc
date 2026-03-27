@@ -1,0 +1,12 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: poc
+nodes:
+  - role: control-plane
+    # Kueue needs these feature gates enabled
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            "feature-gates": "JobManagedBy=true"

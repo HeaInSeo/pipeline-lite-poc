@@ -1,0 +1,60 @@
+# ResourceFlavor: represents available node resources
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: default-flavor
+spec: {}
+---
+# ClusterQueue: standard workloads (A, B nodes)
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: poc-standard-cq
+spec:
+  namespaceSelector: {}
+  queueingStrategy: BestEffortFIFO
+  resourceGroups:
+  - coveredResources: ["cpu", "memory"]
+    flavors:
+    - name: default-flavor
+      resources:
+      - name: cpu
+        nominalQuota: "4"
+      - name: memory
+        nominalQuota: "4Gi"
+---
+# ClusterQueue: highmem workloads (C node - aggregation)
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: poc-highmem-cq
+spec:
+  namespaceSelector: {}
+  queueingStrategy: BestEffortFIFO
+  resourceGroups:
+  - coveredResources: ["cpu", "memory"]
+    flavors:
+    - name: default-flavor
+      resources:
+      - name: cpu
+        nominalQuota: "2"
+      - name: memory
+        nominalQuota: "8Gi"
+---
+# LocalQueue: standard (namespace-scoped)
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: poc-standard-lq
+  namespace: default
+spec:
+  clusterQueue: poc-standard-cq
+---
+# LocalQueue: highmem (namespace-scoped)
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: poc-highmem-lq
+  namespace: default
+spec:
+  clusterQueue: poc-highmem-cq

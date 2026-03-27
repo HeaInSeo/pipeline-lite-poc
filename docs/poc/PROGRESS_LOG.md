@@ -1,5 +1,42 @@
 # PROGRESS_LOG
 
+## Day 6 - 2026-03-27
+
+### 오늘 목표
+- A → B1/B2/B3 fan-out 병렬 실행
+- kueue.x-k8s.io/queue-name label injection 검증
+
+### 변경 파일 목록
+**poc:**
+- cmd/fanout/main.go: fan-out DAG runner
+
+### 구현한 내용
+- DAG 구조: start → A → B1/B2/B3 → end (FinishDag 자동 fan-in)
+- B1/B2/B3: 독립 edge (A→B1, A→B2, A→B3) → dag-go worker pool이 병렬 스케줄
+- queue-name label: map[string]string{"kueue.x-k8s.io/queue-name": "poc-standard-lq"} → 모든 노드에 주입
+- 각 Bx: sleep 4s 포함 → 순차 ~18s vs 병렬 ~10s 차이 측정
+
+### 검증 명령 및 결과
+```bash
+go run ./cmd/fanout/
+# [fanout] PASS: fan-out pipeline succeeded (elapsed=16s)
+# B1/B2/B3 Preflight 동시 시작 (21:18:17)
+# B1/B2/B3 InFlight  동시 완료 (21:18:27) ← 병렬 실행 확인
+# 순차 실행 시 예상 ~24s → 실제 16s (A 6s + B 10s)
+```
+
+### 아직 안 된 것
+- fast-fail: 한 노드 실패 시 나머지 취소 (Day 7)
+- executionClass 분리 standard/highmem (Day 8)
+
+### 리스크 / 막힌 점
+- 없음 (dag-go worker pool 기본값 50으로 fan-out 즉시 동작)
+
+### 내일 첫 작업 제안
+fast-fail: B2를 의도적으로 실패시키고 B1/B3가 Skipped 처리되는지 확인
+
+---
+
 ## Day 5 - 2026-03-27
 
 ### 오늘 목표
@@ -244,3 +281,5 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 <!-- session-end: 2026-03-27 21:10:18 -->
 
 <!-- session-end: 2026-03-27 21:12:01 -->
+
+<!-- session-end: 2026-03-27 21:16:46 -->

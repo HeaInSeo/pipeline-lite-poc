@@ -38,3 +38,4 @@ runner binary
 /runner
 /dag-runner
 /pipeline-abc
+/fanout

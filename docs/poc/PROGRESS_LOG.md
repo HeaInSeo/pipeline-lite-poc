@@ -1,5 +1,44 @@
 # PROGRESS_LOG
 
+## Day 5 - 2026-03-27
+
+### 오늘 목표
+- A→B→C 선형 파이프라인 구성
+- shared PVC 파일 handoff 검증 (A→B→C 순서로 파일 전달)
+
+### 변경 파일 목록
+**poc:**
+- cmd/pipeline-abc/main.go: A→B→C DAG + PVC handoff 검증 runner
+- deploy/poc/poc-pvc.yaml: 클러스터에 적용 (kubectl apply)
+
+### 구현한 내용
+- A→B→C 선형 dag-go 파이프라인 (AddEdge 체인)
+- shared PVC `poc-shared-pvc` → `/data` 마운트 (전 노드 공유)
+- 파일 handoff: A writes `/data/a.txt` → B reads+transforms → `/data/b.txt` → C verifies
+- RWO PVC + kind single-node: 순차 실행이므로 RWO로 충분
+
+### 검증 명령 및 결과
+```bash
+kubectl apply -f deploy/poc/poc-pvc.yaml
+# persistentvolumeclaim/poc-shared-pvc created
+
+go run ./cmd/pipeline-abc/
+# [pipeline-abc] PASS: A→B→C pipeline succeeded with shared PVC handoff
+# 실행 흐름: start→node-a→node-b→node-c→end (순차 확인)
+```
+
+### 아직 안 된 것
+- fan-out (3-5개 병렬 노드) - Day 6
+- executionClass 분리 (standard/highmem) - Day 8
+
+### 리스크 / 막힌 점
+- 없음 (PVC lazy provisioning은 첫 pod mount 시 자동 bind - 예상대로 동작)
+
+### 내일 첫 작업 제안
+fan-out: A 하나 → B1/B2/B3 병렬 실행 + queue-name label injection
+
+---
+
 ## Day 4 - 2026-03-27
 
 ### 오늘 목표
@@ -201,3 +240,7 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 <!-- session-end: 2026-03-27 19:31:13 -->
 
 <!-- session-end: 2026-03-27 21:05:18 -->
+
+<!-- session-end: 2026-03-27 21:10:18 -->
+
+<!-- session-end: 2026-03-27 21:12:01 -->

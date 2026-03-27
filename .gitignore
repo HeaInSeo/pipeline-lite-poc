@@ -37,3 +37,4 @@ runner binary
 # built binaries (root-level executables only, not source directories)
 /runner
 /dag-runner
+/pipeline-abc

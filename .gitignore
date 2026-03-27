@@ -40,3 +40,4 @@ runner binary
 /pipeline-abc
 /fanout
 /fastfail
+/execclass

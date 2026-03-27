@@ -1,5 +1,45 @@
 # PROGRESS_LOG
 
+## Day 8 - 2026-03-27
+
+### 오늘 목표
+- 같은 DAG 내 standard/highmem executionClass 혼용 제출
+- Kueue workload가 올바른 ClusterQueue로 라우팅됨을 확인
+
+### 변경 파일 목록
+**poc:**
+- pkg/adapter/execution_class.go: ExecutionClass 타입 + QueueLabel() 헬퍼
+- cmd/execclass/main.go: 혼용 executionClass DAG runner
+
+### 구현한 내용
+- ExecutionClass("standard"|"highmem") → kueue.x-k8s.io/queue-name label 매핑
+- DAG: A(std) → B1(std)/B2(highmem) → C(std)
+- B1/B2 병렬 실행, 각각 다른 ClusterQueue 동시 활성
+
+### 검증 명령 및 결과
+```bash
+go run ./cmd/execclass/
+# [execclass] PASS: mixed executionClass DAG succeeded
+
+kubectl get workloads -n default | grep ec-
+# job-ec-a-*   poc-standard-lq  poc-standard-cq  True  True
+# job-ec-b2-*  poc-highmem-lq   poc-highmem-cq   True  True  ← highmem 확인
+# job-ec-b1-*  poc-standard-lq  poc-standard-cq  True  True
+# job-ec-c-*   poc-standard-lq  poc-standard-cq  True  True
+```
+
+### 아직 안 된 것
+- operational 검증 (Day 9)
+- POC_EVALUATION.md 작성 (Day 10)
+
+### 리스크 / 막힌 점
+- 없음 (executionClass → queue-name label injection으로 Kueue 라우팅 자동화)
+
+### 내일 첫 작업 제안
+operational 검증: context timeout, 클러스터 재시작 후 재실행, 리소스 부족 시 Kueue pending 동작 확인
+
+---
+
 ## Day 7 - 2026-03-27
 
 ### 오늘 목표
@@ -319,3 +359,5 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 <!-- session-end: 2026-03-27 21:16:46 -->
 
 <!-- session-end: 2026-03-27 21:19:05 -->
+
+<!-- session-end: 2026-03-27 21:22:05 -->

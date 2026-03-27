@@ -1,5 +1,54 @@
 # PROGRESS_LOG
 
+## Day 3 - 2026-03-27
+
+### 오늘 목표
+- spawner K8s driver 최소 구현 (Prepare/Start/Wait/Cancel)
+- Job 1개 생성/성공/실패 감지
+
+### 변경 파일 목록
+**spawner:**
+- pkg/api/types.go: RunSpec에 Command, Labels 추가
+- cmd/imp/k8s_driver.go: 실제 구현 (client-go)
+- cmd/server/main.go: NewK8sFromKubeconfig으로 변경
+- go.mod / go.sum: k8s.io/client-go v0.35.3 추가
+- .golangci.yml: lint config
+
+**poc:**
+- cmd/runner/main.go: 검증용 테스트 runner
+- go.mod: spawner local replace 설정
+
+### 구현한 내용
+- RunSpec에 Command, Labels 필드 추가
+- DriverK8s: Prepare(Job 객체 생성), Start(K8s 제출), Wait(2s 폴링), Cancel(Job 삭제)
+- Kueue 연동: suspend=true + kueue.x-k8s.io/queue-name label 주입
+- BackoffLimit=0: 즉시 실패 (fast-fail 기반)
+- PVC mount: RunSpec.Mounts → K8s Volume/VolumeMount 변환
+- spawner 단독 lint 통과
+
+### 검증 명령 및 결과
+```bash
+go run ./cmd/runner/ success
+# [runner] PASS: job succeeded as expected
+
+go run ./cmd/runner/ fail
+# [runner] Result: state=failed
+# [runner] PASS: job failed as expected
+```
+
+### 아직 안 된 것
+- dag-go와 spawner 연결 (Day 4)
+- shared PVC 실제 마운트 검증 (Day 5)
+
+### 리스크 / 막힌 점
+- K8s BackoffLimit 기본값(6)으로 fail 감지 지연 → BackoffLimit=0으로 해결
+- pre-existing lint 이슈 suppress (.golangci.yml 추가)
+
+### 내일 첫 작업 제안
+dag-go Runnable interface 구현하는 SpawnerNode adapter 작성 (poc/pkg/adapter/)
+
+---
+
 ## Day 2 - 2026-03-27
 
 ### 오늘 목표

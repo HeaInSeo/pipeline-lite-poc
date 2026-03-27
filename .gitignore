@@ -39,3 +39,4 @@ runner binary
 /dag-runner
 /pipeline-abc
 /fanout
+/fastfail

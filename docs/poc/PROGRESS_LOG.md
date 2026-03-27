@@ -1,5 +1,39 @@
 # PROGRESS_LOG
 
+## Day 7 - 2026-03-27
+
+### 오늘 목표
+- fast-fail 전파 검증: B2 실패 → 수렴 노드 C가 실행되지 않음
+
+### 변경 파일 목록
+**poc:**
+- cmd/fastfail/main.go: fast-fail 검증 runner
+
+### 구현한 내용
+- DAG 구조: start → A → B1/B2(FAIL)/B3 → C(수렴) → end
+- B2: `exit 1` (의도적 실패)
+- 실패 전파 경로: B2 InFlightFailed → C preflight "parent channel returned Failed" → C 미실행
+
+### 검증 명령 및 결과
+```bash
+go run ./cmd/fastfail/
+# ff-b1, ff-b3: InFlight 정상 완료 (B1/B3는 A에만 의존, 정상 실행)
+# ff-b2: InFlightFailed (의도적 실패)
+# ff-c: "parent channel returned Failed" → 실행되지 않음 ← fast-fail 확인
+# [fastfail] PASS: Wait=false (B2 failure propagated, C not executed)
+```
+
+### 아직 안 된 것
+- executionClass 분리 (standard/highmem 같은 DAG 내 혼용) - Day 8
+
+### 리스크 / 막힌 점
+- 없음 (dag-go CheckParentsStatus + parent channel Failed 전파 예상대로 동작)
+
+### 내일 첫 작업 제안
+executionClass 분리: 같은 DAG 내 standard 노드와 highmem 노드를 각각 다른 Kueue LocalQueue에 제출
+
+---
+
 ## Day 6 - 2026-03-27
 
 ### 오늘 목표
@@ -283,3 +317,5 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 <!-- session-end: 2026-03-27 21:12:01 -->
 
 <!-- session-end: 2026-03-27 21:16:46 -->
+
+<!-- session-end: 2026-03-27 21:19:05 -->

@@ -40,18 +40,20 @@ import (
 )
 
 const (
-	pvcName              = "poc-shared-pvc"
-	mountPath            = "/data"
-	queueName            = "poc-standard-lq"
-	namespace            = "default"
-	maxConcurrentK8sJobs = 3
-	runStoreFile         = "/tmp/poc-pipeline-runstore.json"
-	dataRoot             = "/data/poc-pipeline"
+	pvcName      = "poc-shared-pvc"
+	mountPath    = "/data"
+	queueName    = "poc-standard-lq"
+	namespace    = "default"
+	defaultSem   = 3
+	runStoreFile = "/tmp/poc-pipeline-runstore.json"
+	dataRoot     = "/data/poc-pipeline"
 )
 
 func main() {
 	var runIDOverride string
-	flag.StringVar(&runIDOverride, "run-id", "", "custom run ID (default: auto-generated timestamp YYYYMMDD-HHMMSS)")
+	var sem int
+	flag.StringVar(&runIDOverride, "run-id", "", "custom run ID (default: auto-generated timestamp YYYYMMDD-HHMMSS-mmm)")
+	flag.IntVar(&sem, "sem", defaultSem, "BoundedDriver max concurrent K8s Job creates (use 2 to observe throttle)")
 	flag.Parse()
 
 	runID := runIDOverride
@@ -83,9 +85,9 @@ func main() {
 	} else {
 		innerDrv = k8sDrv
 	}
-	drv := imp.NewBoundedDriver(innerDrv, maxConcurrentK8sJobs)
+	drv := imp.NewBoundedDriver(innerDrv, sem)
 	log.Printf("[poc-pipeline] BoundedDriver(sem=%d) initialized, K8sAvailable=%v",
-		maxConcurrentK8sJobs, k8sErr == nil)
+		sem, k8sErr == nil)
 
 	// ── 3. RunGate: ingress boundary ─────────────────────────────────────────
 	gate := ingress.NewRunGate(runStore)
@@ -109,6 +111,7 @@ func main() {
 }
 
 // runFanoutCollect builds and executes the A→(B1,B2,B3)→C dag-go pipeline.
+// drv must be *imp.BoundedDriver for stats logging; if not, stats are skipped.
 func runFanoutCollect(ctx context.Context, drv driver.Driver, runID, pBase string) error {
 	dag, err := daggo.InitDag()
 	if err != nil {
@@ -170,6 +173,36 @@ func runFanoutCollect(ctx context.Context, drv driver.Driver, runID, pBase strin
 	if !dag.Start() {
 		return fmt.Errorf("dag Start failed")
 	}
+
+	// Poll BoundedDriver stats while dag is running.
+	// Logs at 50ms intervals; tracks peak inflight observed.
+	// inflight > 0 only during inner.Start() (K8s Job Create API call).
+	// With fast API (< 200ms), the window is narrow — peak tracks the max seen.
+	statsCtx, statsCancel := context.WithCancel(ctx)
+	defer statsCancel()
+	if bd, ok := drv.(*imp.BoundedDriver); ok {
+		go func() {
+			ticker := time.NewTicker(50 * time.Millisecond)
+			defer ticker.Stop()
+			var peakInflight int64
+			for {
+				select {
+				case <-statsCtx.Done():
+					log.Printf("[bounded-stats] FINAL peak_inflight=%d max=%d",
+						peakInflight, bd.Stats().MaxConcurrent)
+					return
+				case <-ticker.C:
+					s := bd.Stats()
+					if s.Inflight > peakInflight {
+						peakInflight = s.Inflight
+						log.Printf("[bounded-stats] NEW PEAK inflight=%d available=%d max=%d",
+							s.Inflight, s.Available, s.MaxConcurrent)
+					}
+				}
+			}
+		}()
+	}
+
 	if !dag.Wait(ctx) {
 		return fmt.Errorf("dag Wait: pipeline did not succeed")
 	}

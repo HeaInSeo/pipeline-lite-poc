@@ -11,14 +11,25 @@ import (
 
 func TestGenerateRunID_Format(t *testing.T) {
 	id := generateRunID()
-	if len(id) != 15 {
-		t.Errorf("generateRunID() len = %d, want 15 (got %q)", len(id), id)
+	// Format: YYYYMMDD-HHMMSS-mmm = 8+1+6+1+3 = 19 chars
+	if len(id) != 19 {
+		t.Errorf("generateRunID() len = %d, want 19 (got %q)", len(id), id)
 	}
 	if id[8] != '-' {
 		t.Errorf("generateRunID() expected '-' at index 8, got %q (id=%s)", id[8], id)
 	}
-	if _, err := time.Parse("20060102-150405", id); err != nil {
-		t.Errorf("generateRunID() = %q does not parse as YYYYMMDD-HHMMSS: %v", id, err)
+	if id[15] != '-' {
+		t.Errorf("generateRunID() expected '-' at index 15, got %q (id=%s)", id[15], id)
+	}
+	// First 15 chars parse as YYYYMMDD-HHMMSS
+	if _, err := time.Parse("20060102-150405", id[:15]); err != nil {
+		t.Errorf("generateRunID() prefix %q does not parse as YYYYMMDD-HHMMSS: %v", id[:15], err)
+	}
+	// Last 3 chars are digits (ms)
+	for _, ch := range id[16:] {
+		if ch < '0' || ch > '9' {
+			t.Errorf("generateRunID() ms suffix %q contains non-digit %q", id[16:], ch)
+		}
 	}
 }
 
@@ -31,15 +42,16 @@ func TestPathBase(t *testing.T) {
 }
 
 func TestNodeRunID_Format(t *testing.T) {
+	// Auto-generated 19-char runId (YYYYMMDD-HHMMSS-mmm)
 	cases := []struct {
 		runID, node string
 		want        string
 	}{
-		{"20260328-123456", "a", "poc-20260328-123456-a"},
-		{"20260328-123456", "b1", "poc-20260328-123456-b1"},
-		{"20260328-123456", "b2", "poc-20260328-123456-b2"},
-		{"20260328-123456", "b3", "poc-20260328-123456-b3"},
-		{"20260328-123456", "c", "poc-20260328-123456-c"},
+		{"20260328-123456-007", "a", "poc-20260328-123456-007-a"},
+		{"20260328-123456-007", "b1", "poc-20260328-123456-007-b1"},
+		{"20260328-123456-007", "b2", "poc-20260328-123456-007-b2"},
+		{"20260328-123456-007", "b3", "poc-20260328-123456-007-b3"},
+		{"20260328-123456-007", "c", "poc-20260328-123456-007-c"},
 	}
 	for _, c := range cases {
 		got := nodeRunID(c.runID, c.node)
@@ -52,11 +64,24 @@ func TestNodeRunID_Format(t *testing.T) {
 	}
 }
 
-func TestNodeRunID_Truncates(t *testing.T) {
+func TestNodeRunID_TruncatesPreservesNodeSuffix(t *testing.T) {
+	// With a 70-char runId, truncation must preserve the node suffix
+	// so all nodes remain distinguishable.
 	long := strings.Repeat("x", 70)
-	got := nodeRunID(long, "a")
-	if len(got) > 63 {
-		t.Errorf("nodeRunID with 70-char runID: len=%d > 63 (got %q)", len(got), got)
+	nodes := []string{"a", "b1", "b2", "b3", "c"}
+	seen := make(map[string]string)
+	for _, node := range nodes {
+		got := nodeRunID(long, node)
+		if len(got) > 63 {
+			t.Errorf("nodeRunID(long,%q): len=%d > 63", node, len(got))
+		}
+		if !strings.HasSuffix(got, "-"+node) {
+			t.Errorf("nodeRunID(long,%q) = %q: missing expected suffix -%s", node, got, node)
+		}
+		if prev, dup := seen[got]; dup {
+			t.Errorf("nodeRunID collision: node=%q and node=%q both produce %q", prev, node, got)
+		}
+		seen[got] = node
 	}
 }
 
@@ -81,9 +106,8 @@ func TestSpecA_Paths(t *testing.T) {
 			t.Errorf("specA command missing %q", want)
 		}
 	}
-	wantRunID := "poc-testrun-a"
-	if spec.RunID != wantRunID {
-		t.Errorf("specA RunID = %q, want %q", spec.RunID, wantRunID)
+	if spec.RunID != "poc-testrun-a" {
+		t.Errorf("specA RunID = %q, want %q", spec.RunID, "poc-testrun-a")
 	}
 	if spec.ImageRef != "busybox:1.36" {
 		t.Errorf("specA ImageRef = %q, want busybox:1.36", spec.ImageRef)

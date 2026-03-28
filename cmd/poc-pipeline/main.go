@@ -96,13 +96,16 @@ func main() {
 	fmt.Printf("[poc-pipeline] starting run %s: A → (B1,B2,B3) → C\n", runID)
 
 	// ── 4. RunGate.Admit: all execution happens inside this call ─────────────
+	// NopDriver path: Prepare() → ErrK8sUnavailable → dag.Wait false →
+	// gate.Admit returns error → os.Exit(1). PASS line is never printed.
 	if err := gate.Admit(ctx, storeID, func(ctx context.Context) error {
 		return runFanoutCollect(ctx, drv, runID, pBase)
 	}); err != nil {
-		log.Printf("[poc-pipeline] FAIL: %v", err)
+		log.Printf("[poc-pipeline] FAIL (K8s path): %v", err)
 		os.Exit(1)
 	}
-	fmt.Printf("[poc-pipeline] PASS: run %s succeeded — report at %s/c-output/report.txt\n", runID, pBase)
+	// Reached only when real K8s Jobs ran and dag.Wait() returned true.
+	fmt.Printf("[poc-pipeline] PASS (K8s path): run %s dag completed — report at %s/c-output/report.txt\n", runID, pBase)
 }
 
 // runFanoutCollect builds and executes the A→(B1,B2,B3)→C dag-go pipeline.
@@ -175,10 +178,13 @@ func runFanoutCollect(ctx context.Context, drv driver.Driver, runID, pBase strin
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// generateRunID returns a timestamp-based run ID in YYYYMMDD-HHMMSS format.
-// Each invocation produces a unique ID, preventing run store collisions.
+// generateRunID returns a timestamp-based run ID in YYYYMMDD-HHMMSS-mmm format.
+// Millisecond precision reduces collision risk when the binary is invoked
+// multiple times within the same second (e.g., scripted test loops).
+// Format: 20260328-123456-007 (19 chars)
 func generateRunID() string {
-	return time.Now().UTC().Format("20060102-150405")
+	t := time.Now().UTC()
+	return fmt.Sprintf("%s-%03d", t.Format("20060102-150405"), t.Nanosecond()/1e6)
 }
 
 // pathBase returns the PVC root directory for a given runId.
@@ -187,13 +193,23 @@ func pathBase(runID string) string {
 }
 
 // nodeRunID returns the K8s Job name for a given runId + node label.
-// Format: "poc-{runId}-{node}", truncated to 63 chars if necessary.
+// Format: "poc-{runId}-{node}".
+// If the full name exceeds 63 chars (K8s limit), the runId portion is
+// truncated while preserving the node suffix, so all nodes remain
+// distinguishable. With auto-generated 19-char runIds the limit is never hit.
 func nodeRunID(runID, node string) string {
 	id := "poc-" + runID + "-" + node
-	if len(id) > 63 {
-		id = id[:63]
+	if len(id) <= 63 {
+		return id
 	}
-	return id
+	// Preserve "-{node}" suffix; truncate runId to fit within 63.
+	suffix := "-" + node
+	prefix := "poc-"
+	maxRunIDLen := 63 - len(prefix) - len(suffix)
+	if maxRunIDLen < 1 {
+		maxRunIDLen = 1
+	}
+	return prefix + runID[:maxRunIDLen] + suffix
 }
 
 func bootstrapRecovery(s store.RunStore) {

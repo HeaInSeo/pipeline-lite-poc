@@ -1,5 +1,57 @@
 # PROGRESS_LOG
 
+## Day 9 - 2026-03-28
+
+### 오늘 목표
+- context timeout 검증 (긴 Job에 짧은 timeout)
+- 리소스 부족 시 Kueue pending → 자원 해제 후 admit 확인
+- 동일 RunID 재실행 (삭제 후 재제출)
+
+### 변경 파일 목록
+**poc:**
+- cmd/operational/main.go: Day 9 검증 runner (timeout/pending/rerun)
+
+**fix (이슈 정리):**
+- pkg/adapter/spawner_node.go: Driver 타입 `*imp.DriverK8s` → `driver.Driver` 인터페이스
+- cmd/execclass/main.go: SetNodeRunner 반환값 미체크 수정
+- cmd/fastfail/main.go: SetNodeRunner 반환값 미체크 수정
+- cmd/fanout/main.go: SetRunner 반환값 미체크 수정
+- cmd/pipeline-abc/main.go: SetRunner 반환값 미체크 수정
+
+### 구현한 내용
+- testTimeout: 60초 Job에 10초 ctx timeout → Wait returns context.DeadlineExceeded → Job 수동 삭제
+- testPending: A(3500m, 15s) 먼저 admit → B(1000m) pending → A 완료 후 B admit
+- testRerun: 동일 RunID Job 완료 후 Cancel(삭제) → 동일 RunID 재제출 → 성공
+
+### 검증 명령 및 결과
+```bash
+go run ./cmd/operational/ timeout
+# [timeout] Wait returned error (expected): context deadline exceeded
+# [timeout] Job deleted OK
+# [timeout] PASS
+
+go run ./cmd/operational/ pending
+# [pending] A finished: state=succeeded
+# [pending] B finished: state=succeeded
+# [pending] PASS: A completed → B admitted and completed
+
+go run ./cmd/operational/ rerun
+# [rerun] run #1: state=succeeded
+# [rerun] run #2: state=succeeded
+# [rerun] PASS: same RunID ran twice successfully
+```
+
+### 아직 안 된 것
+- POC_EVALUATION.md 작성 (Day 10)
+
+### 리스크 / 막힌 점
+- 없음
+
+### 내일 첫 작업 제안
+POC_EVALUATION.md: 10일 검증 결과 총정리, go/no-go 판정, 미결 리스크 목록 작성
+
+---
+
 ## Day 8 - 2026-03-27
 
 ### 오늘 목표
@@ -361,3 +413,13 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 <!-- session-end: 2026-03-27 21:19:05 -->
 
 <!-- session-end: 2026-03-27 21:22:05 -->
+
+<!-- session-end: 2026-03-27 21:25:44 -->
+
+<!-- session-end: 2026-03-28 15:24:53 -->
+
+<!-- session-end: 2026-03-28 15:26:42 -->
+
+<!-- session-end: 2026-03-28 15:29:13 -->
+
+<!-- session-end: 2026-03-28 15:32:51 -->

@@ -80,14 +80,21 @@ func main() {
 	std := adapter.ExecutionClassStandard
 	hm := adapter.ExecutionClassHighmem
 
-	dag.SetNodeRunner("ec-a", &adapter.SpawnerNode{Driver: drv, Spec: makeSpec("ec-a", std, pvcMount,
-		`echo '[ec-A] standard node' && echo 'seed' > /data/ec-seed.txt`)})
-	dag.SetNodeRunner("ec-b1", &adapter.SpawnerNode{Driver: drv, Spec: makeSpec("ec-b1", std, pvcMount,
-		`echo '[ec-B1] standard node' && cat /data/ec-seed.txt && echo 'b1-ok' > /data/ec-b1.txt`)})
-	dag.SetNodeRunner("ec-b2", &adapter.SpawnerNode{Driver: drv, Spec: makeSpecHighmem("ec-b2", hm, pvcMount,
-		`echo '[ec-B2] highmem node' && cat /data/ec-seed.txt && echo 'b2-ok' > /data/ec-b2.txt`)})
-	dag.SetNodeRunner("ec-c", &adapter.SpawnerNode{Driver: drv, Spec: makeSpec("ec-c", std, pvcMount,
-		`echo '[ec-C] standard node' && cat /data/ec-b1.txt && cat /data/ec-b2.txt && echo '[ec-C] both results verified'`)})
+	runners := map[string]*adapter.SpawnerNode{
+		"ec-a": {Driver: drv, Spec: makeSpec("ec-a", std, pvcMount,
+			`echo '[ec-A] standard node' && echo 'seed' > /data/ec-seed.txt`)},
+		"ec-b1": {Driver: drv, Spec: makeSpec("ec-b1", std, pvcMount,
+			`echo '[ec-B1] standard node' && cat /data/ec-seed.txt && echo 'b1-ok' > /data/ec-b1.txt`)},
+		"ec-b2": {Driver: drv, Spec: makeSpecHighmem("ec-b2", hm, pvcMount,
+			`echo '[ec-B2] highmem node' && cat /data/ec-seed.txt && echo 'b2-ok' > /data/ec-b2.txt`)},
+		"ec-c": {Driver: drv, Spec: makeSpec("ec-c", std, pvcMount,
+			`echo '[ec-C] standard node' && cat /data/ec-b1.txt && cat /data/ec-b2.txt && echo '[ec-C] both results verified'`)},
+	}
+	for id, r := range runners {
+		if !dag.SetNodeRunner(id, r) {
+			log.Fatalf("SetNodeRunner(%s) failed", id)
+		}
+	}
 
 	if err := dag.FinishDag(); err != nil {
 		log.Fatalf("FinishDag: %v", err)

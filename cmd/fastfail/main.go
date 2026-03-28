@@ -83,11 +83,18 @@ func main() {
 	pvcMount := api.Mount{Source: pvcName, Target: mountPath, ReadOnly: false}
 	labels := map[string]string{"kueue.x-k8s.io/queue-name": queueName}
 
-	dag.SetNodeRunner("ff-a", &adapter.SpawnerNode{Driver: drv, Spec: specA(pvcMount, labels)})
-	dag.SetNodeRunner("ff-b1", &adapter.SpawnerNode{Driver: drv, Spec: specB(1, false, pvcMount, labels)})
-	dag.SetNodeRunner("ff-b2", &adapter.SpawnerNode{Driver: drv, Spec: specB(2, true, pvcMount, labels)}) // FAIL
-	dag.SetNodeRunner("ff-b3", &adapter.SpawnerNode{Driver: drv, Spec: specB(3, false, pvcMount, labels)})
-	dag.SetNodeRunner("ff-c", &adapter.SpawnerNode{Driver: drv, Spec: specC(pvcMount, labels)})
+	nodeRunners := map[string]*adapter.SpawnerNode{
+		"ff-a":  {Driver: drv, Spec: specA(pvcMount, labels)},
+		"ff-b1": {Driver: drv, Spec: specB(1, false, pvcMount, labels)},
+		"ff-b2": {Driver: drv, Spec: specB(2, true, pvcMount, labels)}, // FAIL
+		"ff-b3": {Driver: drv, Spec: specB(3, false, pvcMount, labels)},
+		"ff-c":  {Driver: drv, Spec: specC(pvcMount, labels)},
+	}
+	for id, r := range nodeRunners {
+		if !dag.SetNodeRunner(id, r) {
+			log.Fatalf("SetNodeRunner(%s) failed", id)
+		}
+	}
 
 	if err := dag.FinishDag(); err != nil {
 		log.Fatalf("FinishDag: %v", err)

@@ -77,9 +77,15 @@ func main() {
 	// Attach runners
 	pvcMount := api.Mount{Source: pvcName, Target: mountPath, ReadOnly: false}
 
-	nodeA.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specA(pvcMount)})
-	nodeB.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specB(pvcMount)})
-	nodeC.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specC(pvcMount)})
+	if !nodeA.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specA(pvcMount)}) {
+		log.Fatalf("SetRunner failed for node-a")
+	}
+	if !nodeB.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specB(pvcMount)}) {
+		log.Fatalf("SetRunner failed for node-b")
+	}
+	if !nodeC.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specC(pvcMount)}) {
+		log.Fatalf("SetRunner failed for node-c")
+	}
 
 	if err := dag.FinishDag(); err != nil {
 		log.Fatalf("FinishDag: %v", err)

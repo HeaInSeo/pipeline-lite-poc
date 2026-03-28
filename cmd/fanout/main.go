@@ -81,10 +81,18 @@ func main() {
 	// queue-name label injection: all nodes → poc-standard-lq
 	queueLabel := map[string]string{"kueue.x-k8s.io/queue-name": "poc-standard-lq"}
 
-	nodeA.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specA(pvcMount, queueLabel)})
-	nodeB1.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specB(1, pvcMount, queueLabel)})
-	nodeB2.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specB(2, pvcMount, queueLabel)})
-	nodeB3.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specB(3, pvcMount, queueLabel)})
+	if !nodeA.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specA(pvcMount, queueLabel)}) {
+		log.Fatalf("SetRunner failed for fanout-a")
+	}
+	if !nodeB1.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specB(1, pvcMount, queueLabel)}) {
+		log.Fatalf("SetRunner failed for fanout-b1")
+	}
+	if !nodeB2.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specB(2, pvcMount, queueLabel)}) {
+		log.Fatalf("SetRunner failed for fanout-b2")
+	}
+	if !nodeB3.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specB(3, pvcMount, queueLabel)}) {
+		log.Fatalf("SetRunner failed for fanout-b3")
+	}
 
 	if err := dag.FinishDag(); err != nil {
 		log.Fatalf("FinishDag: %v", err)

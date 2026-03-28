@@ -8,15 +8,15 @@ import (
 	"fmt"
 
 	daggo "github.com/seoyhaein/dag-go"
-	"github.com/seoyhaein/spawner/cmd/imp"
 	"github.com/seoyhaein/spawner/pkg/api"
+	"github.com/seoyhaein/spawner/pkg/driver"
 )
 
 // SpawnerNode implements dag-go.Runnable.
 // One SpawnerNode per DAG node; it submits a K8s Job and waits for completion.
 type SpawnerNode struct {
 	Spec   api.RunSpec
-	Driver *imp.DriverK8s
+	Driver driver.Driver
 }
 
 var _ daggo.Runnable = (*SpawnerNode)(nil)

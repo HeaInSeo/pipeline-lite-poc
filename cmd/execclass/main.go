@@ -1,14 +1,14 @@
-// cmd/execclass: Day 8 검증용 — 같은 DAG 내 standard/highmem executionClass 혼용
+// cmd/execclass: 같은 DAG 내 standard/highmem executionClass 혼용
+//
+// Sprint 3 변경사항:
+//   - RunGate + JsonRunStore: ingress boundary 등록 (Q1 fix)
+//   - BoundedDriver(sem=3): K8s Job 생성 burst 제어 (Q2 fix)
+//   - K8s init 실패 시 graceful degradation: NopDriver
 //
 // 파이프라인 구조:
 //
 //	start → A(standard) → B1(standard) ─┐
 //	                       B2(highmem)  ─┤→ C(standard) → end
-//
-// 검증 항목:
-//  1. A, B1, C → poc-standard-lq (poc-standard-cq에서 처리)
-//  2. B2       → poc-highmem-lq  (poc-highmem-cq에서 처리)
-//  3. 같은 DAG 내에서 두 큐가 동시 활성화됨 (`kubectl get workloads` 로 확인)
 //
 // 사용법: go run ./cmd/execclass/
 package main
@@ -22,27 +22,47 @@ import (
 
 	daggo "github.com/seoyhaein/dag-go"
 	"github.com/seoyhaein/poc/pkg/adapter"
+	"github.com/seoyhaein/poc/pkg/ingress"
+	"github.com/seoyhaein/poc/pkg/store"
 	"github.com/seoyhaein/spawner/cmd/imp"
 	"github.com/seoyhaein/spawner/pkg/api"
+	"github.com/seoyhaein/spawner/pkg/driver"
 )
 
 const (
-	pvcName   = "poc-shared-pvc"
-	mountPath = "/data"
-	namespace = "default"
+	pvcName              = "poc-shared-pvc"
+	mountPath            = "/data"
+	namespace            = "default"
+	maxConcurrentK8sJobs = 3
+	runStoreFile         = "/tmp/execclass-runstore.json"
+	pipelineRunID        = "execclass-run-1"
 )
 
 func main() {
+	runStore, err := store.NewJsonRunStore(runStoreFile)
+	if err != nil {
+		log.Fatalf("runstore init: %v", err)
+	}
+	bootstrapRecovery(runStore)
+
+	var innerDrv driver.Driver
 	kubeconfig := os.Getenv("KUBECONFIG")
 	if kubeconfig == "" {
 		home, _ := os.UserHomeDir()
 		kubeconfig = home + "/.kube/config"
 	}
-
-	drv, err := imp.NewK8sFromKubeconfig(namespace, kubeconfig)
-	if err != nil {
-		log.Fatalf("driver init: %v", err)
+	k8sDrv, k8sErr := imp.NewK8sFromKubeconfig(namespace, kubeconfig)
+	if k8sErr != nil {
+		log.Printf("[execclass] WARN: K8s unavailable (%v) — using NopDriver", k8sErr)
+		innerDrv = &imp.NopDriver{}
+	} else {
+		innerDrv = k8sDrv
 	}
+	drv := imp.NewBoundedDriver(innerDrv, maxConcurrentK8sJobs)
+	log.Printf("[execclass] BoundedDriver(sem=%d) initialized, K8sAvailable=%v",
+		maxConcurrentK8sJobs, k8sErr == nil)
+
+	gate := ingress.NewRunGate(runStore)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -50,14 +70,31 @@ func main() {
 	fmt.Println("[execclass] building mixed executionClass DAG")
 	fmt.Println("[execclass] A(std) → B1(std)/B2(highmem) → C(std)")
 
+	gateErr := gate.Admit(ctx, pipelineRunID, func(ctx context.Context) error {
+		if !runExecClassPipeline(ctx, drv) {
+			return fmt.Errorf("execclass pipeline failed")
+		}
+		fmt.Println("[execclass] PASS: mixed executionClass DAG succeeded")
+		fmt.Println("[execclass] standard nodes → poc-standard-lq, highmem node → poc-highmem-lq")
+		return nil
+	})
+	if gateErr != nil {
+		fmt.Printf("[execclass] FAIL: %v\n", gateErr)
+		os.Exit(1)
+	}
+}
+
+func runExecClassPipeline(ctx context.Context, drv driver.Driver) bool {
 	dag, err := daggo.InitDag()
 	if err != nil {
-		log.Fatalf("dag init: %v", err)
+		log.Printf("dag init: %v", err)
+		return false
 	}
 
 	for _, id := range []string{"ec-a", "ec-b1", "ec-b2", "ec-c"} {
 		if dag.CreateNode(id) == nil {
-			log.Fatalf("CreateNode(%s) returned nil", id)
+			log.Printf("CreateNode(%s) returned nil", id)
+			return false
 		}
 	}
 
@@ -70,13 +107,12 @@ func main() {
 	}
 	for _, e := range edges {
 		if err := dag.AddEdge(e[0], e[1]); err != nil {
-			log.Fatalf("AddEdge %s→%s: %v", e[0], e[1], err)
+			log.Printf("AddEdge %s→%s: %v", e[0], e[1], err)
+			return false
 		}
 	}
 
 	pvcMount := api.Mount{Source: pvcName, Target: mountPath, ReadOnly: false}
-
-	// executionClass → queue-name label injection
 	std := adapter.ExecutionClassStandard
 	hm := adapter.ExecutionClassHighmem
 
@@ -92,36 +128,35 @@ func main() {
 	}
 	for id, r := range runners {
 		if !dag.SetNodeRunner(id, r) {
-			log.Fatalf("SetNodeRunner(%s) failed", id)
+			log.Printf("SetNodeRunner(%s) failed", id)
+			return false
 		}
 	}
 
 	if err := dag.FinishDag(); err != nil {
-		log.Fatalf("FinishDag: %v", err)
+		log.Printf("FinishDag: %v", err)
+		return false
 	}
-	if !dag.ConnectRunner() {
-		log.Fatalf("ConnectRunner failed")
-	}
-	if !dag.GetReady(ctx) {
-		log.Fatalf("GetReady failed")
+	if !dag.ConnectRunner() || !dag.GetReady(ctx) {
+		return false
 	}
 
 	fmt.Println("[execclass] starting DAG...")
 	if !dag.Start() {
-		log.Fatalf("Start failed")
+		return false
 	}
+	return dag.Wait(ctx)
+}
 
-	ok := dag.Wait(ctx)
-	if ok {
-		fmt.Println("[execclass] PASS: mixed executionClass DAG succeeded")
-		fmt.Println("[execclass] standard nodes → poc-standard-lq, highmem node → poc-highmem-lq")
-	} else {
-		fmt.Println("[execclass] FAIL: pipeline did not succeed")
-		os.Exit(1)
+func bootstrapRecovery(s store.RunStore) {
+	ctx := context.Background()
+	queued, _ := s.ListByState(ctx, store.StateQueued)
+	held, _ := s.ListByState(ctx, store.StateHeld)
+	if len(queued)+len(held) > 0 {
+		log.Printf("[execclass] BOOTSTRAP: recovered %d queued + %d held runs", len(queued), len(held))
 	}
 }
 
-// makeSpec: standard tier (100m CPU / 128Mi)
 func makeSpec(runID string, ec adapter.ExecutionClass, mount api.Mount, cmd string) api.RunSpec {
 	return api.RunSpec{
 		RunID:     runID,
@@ -133,7 +168,6 @@ func makeSpec(runID string, ec adapter.ExecutionClass, mount api.Mount, cmd stri
 	}
 }
 
-// makeSpecHighmem: highmem tier (200m CPU / 512Mi) — 실제 highmem-cq 제출 확인용
 func makeSpecHighmem(runID string, ec adapter.ExecutionClass, mount api.Mount, cmd string) api.RunSpec {
 	return api.RunSpec{
 		RunID:     runID,

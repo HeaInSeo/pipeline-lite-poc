@@ -1,4 +1,9 @@
-// cmd/pipeline-abc: Day 5 검증용 — A→B→C 선형 파이프라인 + shared PVC 파일 handoff
+// cmd/pipeline-abc: A→B→C 선형 파이프라인 + shared PVC 파일 handoff
+//
+// Sprint 3 변경사항:
+//   - RunGate + JsonRunStore: 실행 전 ingress boundary 등록 (Q1 fix)
+//   - BoundedDriver(sem=3): K8s Job 생성 burst 제어 (Q2 fix)
+//   - K8s init 실패 시 graceful degradation: NopDriver + StateHeld
 //
 // 파이프라인 구조:
 //
@@ -22,8 +27,11 @@ import (
 
 	daggo "github.com/seoyhaein/dag-go"
 	"github.com/seoyhaein/poc/pkg/adapter"
+	"github.com/seoyhaein/poc/pkg/ingress"
+	"github.com/seoyhaein/poc/pkg/store"
 	"github.com/seoyhaein/spawner/cmd/imp"
 	"github.com/seoyhaein/spawner/pkg/api"
+	"github.com/seoyhaein/spawner/pkg/driver"
 )
 
 const (
@@ -31,87 +39,155 @@ const (
 	mountPath = "/data"
 	queueName = "poc-standard-lq"
 	namespace = "default"
+
+	// maxConcurrentK8sJobs caps simultaneous Job Create calls to the K8s API.
+	// Increase for higher-throughput environments; decrease for rate-limited clusters.
+	maxConcurrentK8sJobs = 3
+
+	// runStoreFile is the durable-lite JsonRunStore backing file.
+	// Survives process restart: queued/held runs are recovered on next start.
+	runStoreFile = "/tmp/pipeline-abc-runstore.json"
+
+	// pipelineRunID uniquely identifies this pipeline run in the store.
+	pipelineRunID = "pipeline-abc-run-1"
 )
 
 func main() {
+	// ── 1. Durable RunStore ─────────────────────────────────────────────────
+	// Opens or recovers existing state. If the file doesn't exist, starts fresh.
+	runStore, err := store.NewJsonRunStore(runStoreFile)
+	if err != nil {
+		log.Fatalf("runstore init: %v", err)
+	}
+
+	// Bootstrap: recover any runs that were held or queued before a restart.
+	bootstrapRecovery(runStore)
+
+	// ── 2. Driver: DriverK8s wrapped with BoundedDriver ─────────────────────
+	// Sprint 3 wiring: BoundedDriver limits concurrent K8s Job creation to sem=3.
+	// On K8s init failure: NopDriver (returns ErrK8sUnavailable) is used instead
+	// of log.Fatalf. Runs stay in StateHeld until K8s is available.
+	var innerDrv driver.Driver
 	kubeconfig := os.Getenv("KUBECONFIG")
 	if kubeconfig == "" {
 		home, _ := os.UserHomeDir()
 		kubeconfig = home + "/.kube/config"
 	}
 
-	drv, err := imp.NewK8sFromKubeconfig(namespace, kubeconfig)
-	if err != nil {
-		log.Fatalf("driver init: %v", err)
+	k8sDrv, k8sErr := imp.NewK8sFromKubeconfig(namespace, kubeconfig)
+	if k8sErr != nil {
+		log.Printf("[pipeline-abc] WARN: K8s unavailable (%v) — using NopDriver, runs will be held", k8sErr)
+		innerDrv = &imp.NopDriver{}
+	} else {
+		innerDrv = k8sDrv
 	}
+
+	// BoundedDriver wraps the inner driver and caps concurrent Start() calls.
+	// This is the Q2 fix: release-queue burst control is now in the main path.
+	drv := imp.NewBoundedDriver(innerDrv, maxConcurrentK8sJobs)
+	log.Printf("[pipeline-abc] BoundedDriver(sem=%d) initialized, K8sAvailable=%v",
+		maxConcurrentK8sJobs, k8sErr == nil)
+
+	// ── 3. RunGate: ingress boundary ────────────────────────────────────────
+	// RunGate wraps RunStore. Admit() transitions: queued→admitted→running→finished.
+	// This is the Q1 fix: RunStore is populated BEFORE dag.Start().
+	gate := ingress.NewRunGate(runStore)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	fmt.Println("[pipeline-abc] building A→B→C DAG with shared PVC handoff")
 
+	// ── 4. RunGate.Admit: all execution happens inside this call ────────────
+	// The runFn is the existing dag-go execution path, unmodified.
+	// RunGate records state transitions around it.
+	gateErr := gate.Admit(ctx, pipelineRunID, func(ctx context.Context) error {
+		return runPipeline(ctx, drv)
+	})
+	if gateErr != nil {
+		log.Printf("[pipeline-abc] FAIL: gate returned error: %v", gateErr)
+		os.Exit(1)
+	}
+	fmt.Println("[pipeline-abc] PASS: A→B→C pipeline succeeded with shared PVC handoff")
+}
+
+// runPipeline builds and executes the A→B→C dag-go pipeline.
+// This function is unchanged from Sprint 2 — RunGate wraps it externally.
+func runPipeline(ctx context.Context, drv driver.Driver) error {
 	dag, err := daggo.InitDag()
 	if err != nil {
-		log.Fatalf("dag init: %v", err)
+		return fmt.Errorf("dag init: %w", err)
 	}
 
-	// Create nodes
 	nodeA := dag.CreateNode("node-a")
 	nodeB := dag.CreateNode("node-b")
 	nodeC := dag.CreateNode("node-c")
 	if nodeA == nil || nodeB == nil || nodeC == nil {
-		log.Fatalf("CreateNode returned nil")
+		return fmt.Errorf("CreateNode returned nil")
 	}
 
-	// Wire edges: start → A → B → C → (end auto-wired by FinishDag)
 	for _, edge := range [][2]string{
 		{daggo.StartNode, "node-a"},
 		{"node-a", "node-b"},
 		{"node-b", "node-c"},
 	} {
 		if err := dag.AddEdge(edge[0], edge[1]); err != nil {
-			log.Fatalf("AddEdge %s→%s: %v", edge[0], edge[1], err)
+			return fmt.Errorf("AddEdge %s→%s: %w", edge[0], edge[1], err)
 		}
 	}
 
-	// Attach runners
 	pvcMount := api.Mount{Source: pvcName, Target: mountPath, ReadOnly: false}
-
 	if !nodeA.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specA(pvcMount)}) {
-		log.Fatalf("SetRunner failed for node-a")
+		return fmt.Errorf("SetRunner failed for node-a")
 	}
 	if !nodeB.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specB(pvcMount)}) {
-		log.Fatalf("SetRunner failed for node-b")
+		return fmt.Errorf("SetRunner failed for node-b")
 	}
 	if !nodeC.SetRunner(&adapter.SpawnerNode{Driver: drv, Spec: specC(pvcMount)}) {
-		log.Fatalf("SetRunner failed for node-c")
+		return fmt.Errorf("SetRunner failed for node-c")
 	}
 
 	if err := dag.FinishDag(); err != nil {
-		log.Fatalf("FinishDag: %v", err)
+		return fmt.Errorf("FinishDag: %w", err)
 	}
 	if !dag.ConnectRunner() {
-		log.Fatalf("ConnectRunner failed")
+		return fmt.Errorf("ConnectRunner failed")
 	}
 	if !dag.GetReady(ctx) {
-		log.Fatalf("GetReady failed")
+		return fmt.Errorf("GetReady failed")
 	}
 
 	fmt.Println("[pipeline-abc] starting DAG...")
 	if !dag.Start() {
-		log.Fatalf("Start failed")
+		return fmt.Errorf("dag Start failed")
 	}
 
-	ok := dag.Wait(ctx)
-	if ok {
-		fmt.Println("[pipeline-abc] PASS: A→B→C pipeline succeeded with shared PVC handoff")
-	} else {
-		fmt.Println("[pipeline-abc] FAIL: pipeline did not succeed")
-		os.Exit(1)
+	if !dag.Wait(ctx) {
+		return fmt.Errorf("dag Wait: pipeline did not succeed")
+	}
+	return nil
+}
+
+// bootstrapRecovery logs any runs that were queued/held before restart.
+// In production, this would re-submit them. For PoC, we just log the recovery.
+func bootstrapRecovery(s store.RunStore) {
+	ctx := context.Background()
+	queued, _ := s.ListByState(ctx, store.StateQueued)
+	held, _ := s.ListByState(ctx, store.StateHeld)
+	if len(queued)+len(held) > 0 {
+		log.Printf("[pipeline-abc] BOOTSTRAP: recovered %d queued + %d held runs from previous run",
+			len(queued), len(held))
+		for _, r := range queued {
+			log.Printf("[pipeline-abc]   queued: %s (created %s)", r.RunID, r.CreatedAt.Format(time.RFC3339))
+		}
+		for _, r := range held {
+			log.Printf("[pipeline-abc]   held: %s (created %s)", r.RunID, r.CreatedAt.Format(time.RFC3339))
+		}
 	}
 }
 
-// specA: write "hello from node-A" to /data/a.txt
+// ── RunSpec builders ──────────────────────────────────────────────────────────
+
 func specA(mount api.Mount) api.RunSpec {
 	return api.RunSpec{
 		RunID:    "pipeline-abc-a",
@@ -125,7 +201,6 @@ func specA(mount api.Mount) api.RunSpec {
 	}
 }
 
-// specB: read /data/a.txt, write "B processed: <content>" to /data/b.txt
 func specB(mount api.Mount) api.RunSpec {
 	return api.RunSpec{
 		RunID:    "pipeline-abc-b",
@@ -139,7 +214,6 @@ func specB(mount api.Mount) api.RunSpec {
 	}
 }
 
-// specC: read /data/b.txt and verify it contains expected content
 func specC(mount api.Mount) api.RunSpec {
 	return api.RunSpec{
 		RunID:    "pipeline-abc-c",

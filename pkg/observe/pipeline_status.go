@@ -7,13 +7,17 @@
 // There are 6 distinct stop causes, each with a different observable signal:
 //
 //  1. ingress_queue       — RunStore state = queued or held
-//  2. release_queue       — NodeAttemptQueue.Stats().blocked > 0
+//  2. release_queue       — BoundedDriver.Stats().Inflight == MaxConcurrent (Sprint 3: main path)
+//     or NodeAttemptQueue.Stats().blocked > 0 (experimental DagSession path)
 //  3. kueue_pending       — Workload.QuotaReserved=false (K8sObserver.ObserveWorkload)
 //  4. scheduler_unsched   — Pod.PodScheduled=false (K8sObserver.ObservePod)
 //  5. running             — RunStore state = running
 //  6. finished            — RunStore state = finished or canceled
 //
-// Causes 1, 2, 5, 6 are observable without K8s (RunStore + NodeAttemptQueue stats).
+// Sprint 3 update (Q2 fix): cause 2 primary signal is now BoundedDriver (wired in all cmd/*).
+// NodeAttemptQueue remains observable in the experimental DagSession path.
+//
+// Causes 1, 2, 5, 6 are observable without K8s (RunStore + BoundedDriver/NodeAttemptQueue stats).
 // Causes 3, 4 require a live K8s + Kueue cluster (K8sObserver — see integration tests).
 package observe
 
@@ -86,8 +90,8 @@ var AllSignals = []ObservableSignal{
 	},
 	{
 		Cause:       CauseReleaseQueue,
-		Signal:      "NodeAttemptQueue.Stats() → blocked > 0",
-		Layer:       "release control boundary",
+		Signal:      "BoundedDriver.Stats().Inflight == MaxConcurrent (cmd/* main path, Sprint 3)",
+		Layer:       "release control boundary (BoundedDriver wraps DriverK8s)",
 		RequiresK8s: false,
 	},
 	{

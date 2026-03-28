@@ -9,13 +9,25 @@
 //
 //	"dag-go actor/session interprets dependency and creates only ready node attempts."
 //
-// ASSUMPTION: In production, dag-go drives the actual execution loop.
-// DagSession is a structural boundary layer that sits between the DAG spec
-// and the K8s submission path. It can be used standalone in tests without
-// a live K8s cluster.
+// ─── EXPERIMENTAL PATH (Sprint 3) ─────────────────────────────────────────────
+// DagSession is NOT in the production cmd/* execution path.
+// The production main path is:
 //
-// ASSUMPTION: NodeSubmitter concurrency limit (burst protection) is handled
-// by wrapping NodeSubmitter with a NodeAttemptQueue (next diff).
+//	cmd/* → dag-go → SpawnerNode.RunE() → BoundedDriver → DriverK8s
+//
+// dag-go is the SOLE readiness/dependency source of truth.
+// DagSession mirrors dag-go dependency logic → two parallel orchestration engines.
+// This redundancy is acceptable for PoC structural validation but must NOT be
+// introduced into the production path.
+//
+// DagSession remains in this package for:
+//  1. Structural boundary proof (Sprint 2 Q2/Q3 validation)
+//  2. Unit testing NodeAttemptQueue behavior in isolation
+//  3. Future: potential replacement for dag-go if adapter complexity grows
+//
+// ─── ASSUMPTION ────────────────────────────────────────────────────────────────
+// Production replaces DagSession with BoundedDriver(DriverK8s) in the dag-go path.
+// NodeAttemptQueue burst control for DagSession path is experimental only.
 package session
 
 import (

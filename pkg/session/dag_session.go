@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // NodeSubmitter is the boundary toward Kueue/K8s.
@@ -140,17 +141,48 @@ func (s *DagSession) allDepsSucceeded(n *nodeEntry) bool {
 	return true
 }
 
-// submitBatch calls submitter.Submit for each node and marks it nodeSubmitted.
+// submitBatch calls submitter.Submit concurrently for each node.
+// Each Submit runs in its own goroutine so that NodeAttemptQueue's semaphore
+// is effective: when sem=k, at most k goroutines proceed past the semaphore
+// simultaneously, bounding concurrent K8s API calls.
+//
+// Previously sequential: max_concurrent was always 1 regardless of NodeAttemptQueue.
+// Now concurrent: NodeAttemptQueue(sem=k) actually caps concurrent submissions to k.
+//
+// Error policy: first error observed is returned; remaining goroutines continue
+// to completion (they may succeed or fail independently).
+// ASSUMPTION: production may want all-or-nothing semantics; for PoC, first-error is sufficient.
 func (s *DagSession) submitBatch(ctx context.Context, nodes []*nodeEntry) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	var (
+		wg       sync.WaitGroup
+		firstErr atomic.Value // stores error interface
+	)
+
 	for _, n := range nodes {
-		if err := s.submitter.Submit(ctx, n.id); err != nil {
-			return fmt.Errorf("submit %s: %w", n.id, err)
-		}
-		s.mu.Lock()
-		if s.nodes[n.id].status == nodeHeld {
-			s.nodes[n.id].status = nodeSubmitted
-		}
-		s.mu.Unlock()
+		n := n // capture loop variable
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.submitter.Submit(ctx, n.id); err != nil {
+				firstErr.CompareAndSwap(nil, fmt.Errorf("submit %s: %w", n.id, err))
+				return
+			}
+			s.mu.Lock()
+			if s.nodes[n.id].status == nodeHeld {
+				s.nodes[n.id].status = nodeSubmitted
+			}
+			s.mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+
+	if v := firstErr.Load(); v != nil {
+		return v.(error)
 	}
 	return nil
 }

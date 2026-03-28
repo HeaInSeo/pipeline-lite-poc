@@ -217,7 +217,7 @@ func TestBurstBoundary_AllReadyAtStart(t *testing.T) {
 	}
 	t.Logf("OBSERVATION: %d nodes, %d calls, max_concurrent=%d, elapsed=%s",
 		n, calls, maxConc, elapsed.Round(time.Millisecond))
-	t.Logf("OBSERVATION: submitBatch is sequential → max_concurrent=1")
-	t.Logf("OBSERVATION: caller can fire N DagSessions concurrently → N×M K8s API calls with no cap")
-	t.Logf("OBSERVATION: NodeAttemptQueue(sem=3) proposed in ARCH_BOUNDARY.md §7")
+	t.Logf("OBSERVATION: submitBatch is now CONCURRENT — goroutines per node")
+	t.Logf("OBSERVATION: without NodeAttemptQueue, all %d nodes hit K8s API simultaneously (max_concurrent=%d)", n, maxConc)
+	t.Logf("OBSERVATION: NodeAttemptQueue(sem=3) caps this to max_concurrent=3 — see TestBurstBoundary_BoundedRelease")
 }

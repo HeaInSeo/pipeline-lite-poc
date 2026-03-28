@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -48,12 +49,50 @@ func (s *JsonRunStore) load() error {
 	return json.Unmarshal(data, &s.records)
 }
 
+// persist writes the records atomically via a tmp-file + rename pattern.
+// This ensures that a crash during write never leaves a partial/corrupt file:
+// either the old file remains intact or the new file is fully written.
+//
+// Improvement over os.WriteFile direct: eliminates partial-write corruption risk.
+// LIMITATION: os.Rename is atomic on POSIX (same filesystem). Not guaranteed on
+// cross-device or network filesystems. Windows: atomic rename requires ReplaceFile.
+// For PoC this is sufficient. Production: use WAL or a proper database.
 func (s *JsonRunStore) persist() error {
 	data, err := json.Marshal(s.records)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o600)
+
+	// Write to temp file in the same directory (ensures same filesystem for rename)
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".runstore-*.tmp")
+	if err != nil {
+		return fmt.Errorf("persist tmp create: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("persist tmp write: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("persist tmp close: %w", err)
+	}
+
+	// Atomic rename: on POSIX, this is guaranteed atomic
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("persist rename: %w", err)
+	}
+	return nil
+}
+
+// Path returns the file path this store is backed by.
+// Useful for opening a second store instance (e.g., restart simulation in tests).
+func (s *JsonRunStore) Path() string {
+	return s.path
 }
 
 func (s *JsonRunStore) Enqueue(_ context.Context, rec RunRecord) error {

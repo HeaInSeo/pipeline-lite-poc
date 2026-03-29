@@ -370,19 +370,25 @@ func twoStage8x4(ctx context.Context, runID, pBase string, drv driver.Driver, m 
 
 // ── DAG execution ─────────────────────────────────────────────────────────────
 
-// noPreflight disables dag-go's per-node 30s preflight wait deadline.
-// Default 30s causes the collector node to timeout when straggler B workers
-// push preflight wait to ~24s (within 6s of the 30s limit). Setting
-// DefaultTimeout=0 delegates all deadline control to the caller's ctx.
-func noPreflight() daggo.DagOption {
-	return func(d *daggo.Dag) {
-		d.Config.DefaultTimeout = 0
-	}
+// withCallerDeadlineOnly returns a DagOption that sets DefaultTimeout=0,
+// meaning preFlight relies solely on the caller's ctx deadline rather than
+// adding any extra per-node deadline.
+//
+// Why: dag-go's default DefaultTimeout=30s begins counting from goroutine
+// start, not from dependency satisfaction. For long-running patterns
+// (long-tail-8, two-stage-8x4) the downstream collector node's preFlight
+// budget is exhausted waiting for straggler workers, causing dag.Wait()=false
+// even though all K8s Jobs completed successfully.  Setting DefaultTimeout=0
+// delegates all deadline control to the caller ctx (30-minute overall
+// timeout), which is the correct policy for multi-minute pipelines.
+func withCallerDeadlineOnly() daggo.DagOption {
+	return daggo.WithDefaultTimeout(0)
 }
 
 // initDag returns a new Dag with per-node preflight timeout disabled.
+// All patterns must use this instead of daggo.InitDag() directly.
 func initDag() (*daggo.Dag, error) {
-	return daggo.InitDagWithOptions(noPreflight())
+	return daggo.InitDagWithOptions(withCallerDeadlineOnly())
 }
 
 func execDag(ctx context.Context, dag *daggo.Dag) error {

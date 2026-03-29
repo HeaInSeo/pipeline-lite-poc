@@ -487,3 +487,23 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 <!-- session-end: 2026-03-28 22:11:26 -->
 
 <!-- session-end: 2026-03-28 22:15:00 -->
+
+<!-- session-end: 2026-03-28 22:12:34 -->
+
+## Sprint 5 - 2026-03-28
+
+### 완료 항목
+- cmd/stress/main.go: 스트레스 하네스 진입점 (5개 패턴 디스패치, multi-run-burst)
+- cmd/stress/patterns.go: InstrumentedRunner, RunMetrics, 5개 패턴 구현, DefaultTimeout=0 fix
+- cmd/stress/stress_test.go: 7/7 단위 테스트 PASS
+- docs/poc/synthetic_pipeline_patterns.md: 패턴 카탈로그 living document
+- docs/poc/SPRINT5_FINAL_REPORT.md: 12개 항목 최종 보고서
+
+### 실험 결과 요약
+- wide-fanout-8: sem=1/4/8 모두 critical_path=18s (idle 클러스터, sem throttle 무영향)
+- long-tail-8: DefaultTimeout=30s 버그 발견 → InitDagWithOptions(noPreflight()) 수정
+- two-stage-8x4: collector_delay=12s (M+C 스테이지 2단계 반영)
+- mixed-duration-8: b_stage=14s (B8=9s sleep 스트래글러 지배)
+- multi-run-burst: 5/5 PASS, wall=35s, 격리 검증 완료
+
+<!-- session-end: 2026-03-28 -->

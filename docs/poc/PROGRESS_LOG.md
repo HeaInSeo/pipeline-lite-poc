@@ -490,6 +490,28 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 
 <!-- session-end: 2026-03-28 22:12:34 -->
 
+## Sprint 6 - 2026-04-01
+
+### 완료 항목
+- cmd/ingress/main.go: Redis Dispatcher + wideFanout3 + K8s Job spec (//go:build redis, 신규 ~220줄)
+- docs/poc/SPRINT6_RUNBOOK.md: 재현 가능한 실행 절차
+- docs/poc/SPRINT6_FINAL_REPORT.md: 최종 보고서
+
+### 구현 핵심
+- Redis Streams(XREADGROUP) → gate.Admit() → dag-go → BoundedDriver → K8s Job end-to-end 연결
+- Ack 정책: gate.Admit() nil 반환(= 파이프라인 전체 완료) 후에만 XACK → at-least-once
+- 파이프라인: setup → B1/B2/B3 → collect (wideFanout3, inline)
+- 기존 컴포넌트 7개 재사용, 신규 wiring 코드만 추가
+
+### 빌드/테스트
+- go build -tags redis ./cmd/ingress/ → PASS
+- go build ./... (기본 빌드) → PASS
+- go test ./... → PASS (6 packages)
+
+<!-- session-end: 2026-04-01 -->
+
+---
+
 ## Sprint 5 - 2026-03-28
 
 ### 완료 항목
@@ -507,3 +529,45 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 - multi-run-burst: 5/5 PASS, wall=35s, 격리 검증 완료
 
 <!-- session-end: 2026-03-28 -->
+
+<!-- session-end: 2026-03-29 15:53:35 -->
+
+<!-- session-end: 2026-03-29 16:23:50 -->
+
+<!-- session-end: 2026-03-29 16:47:19 -->
+
+<!-- session-end: 2026-03-29 16:59:57 -->
+
+<!-- session-end: 2026-03-29 17:16:42 -->
+
+<!-- session-end: 2026-03-30 17:48:56 -->
+
+<!-- session-end: 2026-03-30 17:50:31 -->
+
+<!-- session-end: 2026-03-30 17:52:19 -->
+
+<!-- session-end: 2026-03-30 18:07:30 -->
+
+<!-- session-end: 2026-03-30 18:41:20 -->
+
+<!-- session-end: 2026-03-30 18:44:42 -->
+
+<!-- session-end: 2026-03-30 18:47:21 -->
+
+<!-- session-end: 2026-03-30 18:47:57 -->
+
+<!-- session-end: 2026-03-30 18:48:31 -->
+
+<!-- session-end: 2026-04-01 15:48:02 -->
+
+<!-- session-end: 2026-04-01 15:53:15 -->
+
+<!-- session-end: 2026-04-01 16:18:46 -->
+
+<!-- session-end: 2026-04-01 16:23:55 -->
+
+<!-- session-end: 2026-04-01 16:32:32 -->
+
+<!-- session-end: 2026-04-01 16:37:22 -->
+
+<!-- session-end: 2026-04-01 19:02:31 -->

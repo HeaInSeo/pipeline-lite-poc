@@ -41,3 +41,7 @@ runner binary
 /fanout
 /fastfail
 /execclass
+/ingress
+/poc-pipeline
+/stress
+/operational

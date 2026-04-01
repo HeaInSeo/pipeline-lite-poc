@@ -174,24 +174,77 @@ cat /tmp/ingress-runstore.json
 `docs/poc/SPRINT6_RUNBOOK.md` 참조. 핵심 명령어:
 
 ```bash
-# 1. Redis 기동
-docker run -d --name poc-redis -p 6379:6379 redis:7-alpine
+# 1. Redis 기동 (127.0.0.1 바인딩: 동일 호스트 내부 접근만 허용)
+docker run -d --name poc-redis -p 127.0.0.1:6379:6379 redis:7-alpine
 
 # 2. 클러스터 확인
 kubectl get nodes && kubectl get pvc poc-shared-pvc -n default
 
-# 3. end-to-end 실행 (produce + dispatch + once)
+# 3-A. end-to-end 실행 (produce + dispatch + once, 통합 방식)
 go run -tags redis ./cmd/ingress/ --produce --once
+
+# 3-B. Dispatcher 대기 + manual XADD (분리 방식)
+# 터미널 A: go run -tags redis ./cmd/ingress/ --once
+# 터미널 B: redis-cli -h 127.0.0.1 XADD poc:runs '*' \
+#             run_id "manual-001" \
+#             payload '{"run_id":"manual-001","created_at":"2026-04-01T12:00:00Z"}'
 
 # 4. 검증
 kubectl get jobs -n default | grep "^i-"
-redis-cli XPENDING poc:runs poc-workers - + 10   # → empty
-cat /tmp/ingress-runstore.json                    # → state: finished
+redis-cli -h 127.0.0.1 XPENDING poc:runs poc-workers - + 10   # → empty
+cat /tmp/ingress-runstore.json                                  # → state: finished
 ```
 
 ---
 
-## 7. 남은 리스크 / 다음 스프린트로 넘길 항목
+## 7. 실패 경로 검증 결과 (PEL 잔류 확인)
+
+### 검증 방법
+
+`--fail` 플래그 (`cmd/ingress/main.go`에 추가된 dev-only 경로):
+- K8s Job을 생성하지 않고 `gate.Admit()` 내부 `runFn`에서 즉시 에러를 반환한다.
+- `gate.Admit()` → `canceled` 상태 전이 → 에러 반환
+- `dispatch()` 내 `admitErr != nil` 분기 → `q.Ack()` 호출 없음
+
+### 실행
+
+```bash
+go run -tags redis ./cmd/ingress/ --produce --once --fail
+```
+
+### 관찰된 출력
+
+```
+[ingress] dispatcher starting  once=true fail=true
+[dispatcher] received  runID=... entryID=...
+[ingress] run ... → queued
+[ingress] run ... → admitted-to-dag
+[ingress] run ... → running
+[ingress] run ... → canceled: synthetic failure (--fail flag): PEL retention test
+[dispatcher] run FAILED  runID=... err=... — NOT acking (PEL retains)
+[dispatcher] XPENDING count=1        ← Ack 미호출 확인
+```
+
+`XACK ok` 로그 **없음** / `XPENDING count=1` 확인.
+
+### redis-cli 직접 확인
+
+```bash
+redis-cli -h 127.0.0.1 XPENDING poc:runs poc-workers - + 10
+# 1) 1) "..."           ← entry ID
+#       2) "dispatcher-1"
+#       3) (integer) ...  ← idle ms
+#       4) (integer) 1    ← delivery count
+```
+
+### 결론
+
+파이프라인 실패 시 XACK가 호출되지 않으며 메시지가 PEL에 잔류함을 확인했다.
+자동 재시도(XCLAIM)는 구현하지 않았으나 "유실되지 않음"은 이 결과로 증명된다.
+
+---
+
+## 9. 남은 리스크 / 다음 스프린트로 넘길 항목
 
 ### 남은 리스크
 
@@ -213,7 +266,7 @@ cat /tmp/ingress-runstore.json                    # → state: finished
 
 ---
 
-## 8. 테스트/빌드 결과 요약
+## 10. 테스트/빌드 결과 요약
 
 | 항목 | 결과 |
 |------|------|

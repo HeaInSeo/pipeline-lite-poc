@@ -72,6 +72,7 @@ func main() {
 	var (
 		produce bool
 		once    bool
+		fail    bool
 		sem     int
 		runID   string
 	)
@@ -79,6 +80,8 @@ func main() {
 		"Dispatcher 실행 전 test run 1건을 Redis에 XADD한다")
 	flag.BoolVar(&once, "once", false,
 		"메시지 1건 처리 후 Dispatcher를 종료한다")
+	flag.BoolVar(&fail, "fail", false,
+		"[dev] 수신한 run을 의도적으로 실패시켜 PEL 잔류를 검증한다 (K8s Job 미생성)")
 	flag.IntVar(&sem, "sem", defaultSem,
 		"BoundedDriver max concurrent K8s Job creates")
 	flag.StringVar(&runID, "run-id", "",
@@ -134,8 +137,8 @@ func main() {
 	}
 
 	// ── Dispatcher ────────────────────────────────────────────────────────────
-	log.Printf("[ingress] dispatcher starting  once=%v", once)
-	dispatch(ctx, q, gate, drv, once)
+	log.Printf("[ingress] dispatcher starting  once=%v fail=%v", once, fail)
+	dispatch(ctx, q, gate, drv, once, fail)
 }
 
 // dispatch consumes messages from Redis Streams and drives the pipeline.
@@ -145,7 +148,7 @@ func main() {
 //   - Admit() nil 반환 = 파이프라인 전체 완료.
 //   - XACK는 Admit() 성공 후에만 호출한다.
 //   - Admit() 실패 → Ack 하지 않음 → PEL 잔류 → 향후 XCLAIM 복구 가능.
-func dispatch(ctx context.Context, q *queue.RedisRunQueue, gate *ingress.RunGate, drv driver.Driver, once bool) {
+func dispatch(ctx context.Context, q *queue.RedisRunQueue, gate *ingress.RunGate, drv driver.Driver, once, fail bool) {
 	for {
 		if ctx.Err() != nil {
 			log.Printf("[dispatcher] context done: %v", ctx.Err())
@@ -164,6 +167,11 @@ func dispatch(ctx context.Context, q *queue.RedisRunQueue, gate *ingress.RunGate
 		log.Printf("[dispatcher] received  runID=%s entryID=%s", msg.RunID, entryID)
 
 		admitErr := gate.Admit(ctx, msg.RunID, func(ctx context.Context) error {
+			if fail {
+				// [dev] --fail: K8s Job을 생성하지 않고 즉시 에러 반환.
+				// 목적: 실패 시 XACK가 호출되지 않고 PEL에 메시지가 잔류함을 검증한다.
+				return fmt.Errorf("synthetic failure (--fail flag): PEL retention test")
+			}
 			return runWideFanout3(ctx, msg.RunID, drv)
 		})
 

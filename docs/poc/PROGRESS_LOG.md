@@ -490,6 +490,125 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 
 <!-- session-end: 2026-03-28 22:12:34 -->
 
+## Sprint 10-1 - 2026-04-03
+
+### 완료 항목
+- deploy/kueue/queues.yaml: poc-standard-cq cpu quota 4000m → 500m (실험), 완료 후 4000m 롤백
+- docs/poc/SPRINT10_1_FINAL_REPORT.md: 최종 보고서 (Sprint 9 vs Sprint 10-1 비교 표 포함)
+
+### 구현 핵심
+- 코드 변경 없음. 단일 변수 (quota) 변경 실험
+- 유일한 차이: poc-standard-cq cpu nominalQuota 4000m → 500m
+- 실험 완료 후 queues.yaml 원상 복구 (cpu="4")
+
+### 실험 결과
+- wall-clock: 36s → 43s (+7s, +19%)
+- Kueue admission 대기 최대 ~6s (worker-1 Jobs가 quota 포화 상태에서 대기)
+- XPENDING 최종: 0 (at-least-once 유지)
+- runstore finished: 5/5
+- K8s Jobs Complete: 25/25 (naming collision 없음)
+- 개별 run 지연: run-001/003에서 18s → 24~25s (quota 경합으로 worker 단계 지연)
+
+### 관찰 메커니즘
+- 3 runs × 3 workers = 9 Jobs 동시 제출 → 500m quota에서 4~6개 Job admission 대기 발생
+- prepare 노드(순차 제출): quota 여유 → 즉시 admitted
+- worker 노드(동시 9개 제출): 5개 즉시, 4개 최대 6s 대기
+
+<!-- session-end: 2026-04-03 -->
+
+---
+
+## Sprint 9 - 2026-04-03
+
+### 완료 항목
+- cmd/ingress/main.go: `--concurrent-runs N` 플래그 + `dispatch()` concurrent화 (sync import, semaphore, WaitGroup)
+- docs/poc/SPRINT9_FINAL_REPORT.md: 최종 보고서 (Sprint 8 vs Sprint 9 비교 표 포함)
+
+### 구현 핵심
+- semaphore(chan struct{}, N) + WaitGroup으로 최대 N개 run 동시 처리
+- semaphore를 Consume 전에 획득 → sequential 모드(N=1)에서 Sprint 8 XPENDING 패턴 유지
+- entryID/runID goroutine 인자로 명시 전달 (loop variable capture 방지)
+- at-least-once Ack 의미론 변경 없음
+
+### 0단계 확인
+- go test -race ./... → PASS (JsonRunStore 이미 sync.Mutex 보유, BoundedDriver 이미 race-safe)
+- 별도 mutex 추가 불필요
+
+### 실험 결과
+- --concurrent-runs 1 regression: PASS (Sprint 8 sequential 동일)
+- --concurrent-runs 3, N=5: wall-clock 91s → 36s (-60%), XPENDING=0, 25 Jobs Complete
+- 3개 run 동시 running 로그 확인
+
+### 빌드/테스트
+- go build -tags redis ./cmd/ingress/ → PASS
+- go build ./... (기본 빌드) → PASS
+- go test -race ./... → PASS (6 packages, race detector)
+
+<!-- session-end: 2026-04-03 -->
+
+---
+
+## Sprint 8 - 2026-04-03
+
+### 완료 항목
+- cmd/dummy/main.go: N-shot submitter (신규, //go:build redis)
+- pkg/ingress/cmd_wiring_test.go: cmd/dummy producer-only 예외 처리 추가
+- docs/poc/SPRINT8_FINAL_REPORT.md: 최종 보고서
+
+### 구현 핵심
+- `go run -tags redis ./cmd/dummy/ -n 5` → 5개 runID XADD 후 종료
+- runID: `dummy-{YYYYMMDD-HHMMSS}-{seq:03d}` — burst에서도 충돌 없음
+- producer/consumer 경계 분리: dummy = Enqueue 전용, ingress = Consume + pipeline 실행
+- specimen v0.1 변경 없음
+
+### 실험 결과 요약
+- XLEN=5 backlog 확인 (Dispatcher 없이 제출 후)
+- sequential drain: 5 runs × ~18s = 91s 총 소요
+- XPENDING=0, runstore 5개 finished, K8s Jobs 25개 Complete
+- 현재 구조 한계 명시: Dispatcher 동기 → Kueue pressure 없음, scheduler 부하 없음
+
+### 후속 정리 (Sprint 8 polish)
+- cmd/ingress/main.go: `--max-runs N` 추가 (~6줄, pkill 불필요, exit 0 보장)
+- pkg/ingress/cmd_wiring_test.go: producerOnlyCmds 주석 WHY 보강
+- docs/poc/SPRINT8_FINAL_REPORT.md: 최소 계약 섹션 + baseline 재실험 runbook 추가
+
+### 빌드/테스트
+- go build -tags redis ./cmd/dummy/ → PASS
+- go build -tags redis ./cmd/ingress/ → PASS
+- go build ./... (기본 빌드) → PASS
+- go test ./... → PASS (6 packages)
+
+<!-- session-end: 2026-04-03 -->
+
+---
+
+## Sprint 7 - 2026-04-03
+
+### 완료 항목
+- cmd/ingress/main.go: `--pipeline` 플래그 + `runSpecimenPipeline()` + specimen spec builders + dispatch 라우팅 (~120줄 추가)
+- docs/poc/PIPELINE_SPECIMEN.md: canonical specimen v0.1 공식 문서 (Sprint 7 핵심 산출물)
+- docs/poc/SPRINT7_FINAL_REPORT.md: 최종 보고서
+
+### 구현 핵심
+- `--pipeline fanout` : Sprint 6 happy path 명시 연결 (regression 확인)
+- `--pipeline specimen`: prepare → worker-1/2/3 → collect (canonical specimen v0.1)
+- 기존 `runWideFanout3()` / `ingressSpec*` 수정 없음 — wiring 추가만
+- specimen K8s Job 이름: `i-{runID}-prepare`, `i-{runID}-worker-N`, `i-{runID}-collect`
+
+### 실행 결과
+- `--pipeline fanout` regression: PASS (XPENDING=0, state=finished)
+- `--pipeline specimen` end-to-end: PASS (5 K8s Jobs Complete, XPENDING=0, state=finished)
+- `--pipeline specimen --fail` PEL 잔류: PASS (XPENDING=1, XACK 미호출)
+
+### 빌드/테스트
+- go build -tags redis ./cmd/ingress/ → PASS
+- go build ./... (기본 빌드) → PASS
+- go test ./... → PASS (6 packages)
+
+<!-- session-end: 2026-04-03 -->
+
+---
+
 ## Sprint 6 - 2026-04-01
 
 ### 완료 항목
@@ -579,3 +698,47 @@ kind 클러스터 생성 (kind-up.sh 작성 및 실행)
 <!-- session-end: 2026-04-01 19:17:06 -->
 
 <!-- session-end: 2026-04-01 19:23:22 -->
+
+<!-- session-end: 2026-04-01 19:25:07 -->
+
+<!-- session-end: 2026-04-01 19:32:06 -->
+
+<!-- session-end: 2026-04-01 19:42:52 -->
+
+<!-- session-end: 2026-04-01 20:04:49 -->
+
+<!-- session-end: 2026-04-01 20:05:42 -->
+
+<!-- session-end: 2026-04-01 20:21:53 -->
+
+<!-- session-end: 2026-04-01 20:26:42 -->
+
+<!-- session-end: 2026-04-01 20:31:45 -->
+
+<!-- session-end: 2026-04-01 20:37:01 -->
+
+<!-- session-end: 2026-04-03 17:19:14 -->
+
+<!-- session-end: 2026-04-03 17:20:29 -->
+
+<!-- session-end: 2026-04-03 17:21:40 -->
+
+<!-- session-end: 2026-04-03 17:37:29 -->
+
+<!-- session-end: 2026-04-03 18:02:29 -->
+
+<!-- session-end: 2026-04-03 20:05:02 -->
+
+<!-- session-end: 2026-04-03 20:05:17 -->
+
+<!-- session-end: 2026-04-03 20:46:32 -->
+
+<!-- session-end: 2026-04-03 21:00:52 -->
+
+<!-- session-end: 2026-04-03 21:19:52 -->
+
+<!-- session-end: 2026-04-03 21:50:01 -->
+
+<!-- session-end: 2026-04-03 22:10:01 -->
+
+<!-- session-end: 2026-04-03 22:18:53 -->

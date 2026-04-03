@@ -40,9 +40,20 @@ func TestQ1_MainPathWiring_AllCmdUsesRunGate(t *testing.T) {
 		hasBounded bool
 	}
 
+	// producerOnlyCmds는 RunGate/BoundedDriver wiring 검사에서 제외되는 cmd 목록이다.
+	// 이 테스트는 "pipeline executor가 RunGate를 건너뛰는 회귀"를 잡기 위해 만들어졌다.
+	// producer(submit-only) cmd는 RunGate/BoundedDriver를 사용하지 않는 것이 설계 의도이므로
+	// 여기에 등록하여 검사 대상에서 제외한다.
+	producerOnlyCmds := map[string]bool{
+		"dummy": true, // Sprint 8: N-shot submitter, producer-only (Enqueue만 호출, pipeline 실행 없음)
+	}
+
 	var results []result
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			continue
+		}
+		if producerOnlyCmds[entry.Name()] {
 			continue
 		}
 		mainFile := filepath.Join(cmdDir, entry.Name(), "main.go")
